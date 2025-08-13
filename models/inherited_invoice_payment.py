@@ -14,13 +14,20 @@ from odoo import models, fields, api, _
 
 class AccountPayments(models.Model):
     _inherit = 'account.payment'
-
+    # rhodetech custom fields
+    journal_current_balance = fields.Float(string='Journal Current Balance', compute='_compute_journal_current_balance')
+    # rhodetech custom fields
     apply_manual_currency_exchange = fields.Boolean(
         string='Apply Manual Currency Exchange')
     manual_currency_exchange_rate = fields.Float(
         string='Manual Currency Exchange Rate')
     active_manual_currency_rate = fields.Boolean(
         'active Manual Currency', default=False)
+
+    @api.depends('journal_id')
+    def _compute_journal_current_balance(self):
+        for payment in self:
+            payment.journal_current_balance = payment.journal_id.current_statement_balance
 
     @api.onchange('currency_id')
     def onchange_currency_id(self):
