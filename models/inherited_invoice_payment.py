@@ -15,7 +15,12 @@ from odoo import models, fields, api, _
 class AccountPayments(models.Model):
     _inherit = 'account.payment'
     # rhodetech custom fields
-    journal_current_balance = fields.Float(string='Journal Current Balance', compute='_compute_journal_current_balance')
+    journal_current_balance = fields.Monetary(
+        string="Saldo Actual del Diario",
+        compute='_compute_journal_current_balance',
+        help="Muestra el saldo actual de la cuenta de liquidez asociada a este diario."
+    )
+
     # rhodetech custom fields
     apply_manual_currency_exchange = fields.Boolean(
         string='Apply Manual Currency Exchange')
@@ -26,8 +31,23 @@ class AccountPayments(models.Model):
 
     @api.depends('journal_id')
     def _compute_journal_current_balance(self):
+        """
+        Calcula el saldo del diario de una forma compatible con múltiples
+        versiones de Odoo, obteniendo el saldo directamente desde la cuenta
+        contable asociada.
+        """
         for payment in self:
-            payment.journal_current_balance = payment.journal_id.current_statement_balance
+            payment.journal_current_balance = 0.0
+            
+            # Continuamos solo si es un diario de banco o efectivo
+            if payment.journal_id and payment.journal_id.type in ('bank', 'cash'):
+                # Obtenemos la cuenta de liquidez por defecto del diario.
+                # 'default_account_id' es el nombre estándar para este campo.
+                account = payment.journal_id.default_account_id
+                
+                # Si la cuenta está configurada, leemos su campo 'balance'
+                if account:
+                    payment.journal_current_balance = account.current_balance
 
     @api.onchange('currency_id')
     def onchange_currency_id(self):
