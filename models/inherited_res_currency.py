@@ -52,7 +52,7 @@ class ResCurrency(models.Model):
         # apply conversion rate
         if from_amount:
             if self._context.get('cus_active_manutal_currency'):
-                to_amount = from_amount / self._context.get('cus_manual_rate')
+                to_amount = from_amount * self._context.get('cus_manual_rate')
             elif self._context.get('diff_active_manutal_currency'):
                 to_amount = from_amount * self._context.get('diff_manual_rate')
             else:

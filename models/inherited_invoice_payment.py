@@ -70,8 +70,8 @@ class AccountPayments(models.Model):
 
         if self.active_manual_currency_rate:
             if self.apply_manual_currency_exchange and self.manual_currency_exchange_rate:
-                liquidity_balance = liquidity_amount_currency / self.manual_currency_exchange_rate
-                write_off_balance = write_off_amount_currency / self.manual_currency_exchange_rate
+                liquidity_balance = liquidity_amount_currency * self.manual_currency_exchange_rate
+                write_off_balance = write_off_amount_currency * self.manual_currency_exchange_rate
             else:
                 write_off_balance = self.currency_id._convert(
                     write_off_amount_currency,

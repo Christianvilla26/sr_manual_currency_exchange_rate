@@ -109,7 +109,7 @@ class AccountMoveLine(models.Model):
             ):
                 balance = line.company_id.currency_id.round(line.amount_currency / line.currency_rate)
                 if line.move_id.apply_manual_currency_exchange and line.move_id.manual_currency_exchange_rate:
-                    balance = line.amount_currency / line.move_id.manual_currency_exchange_rate
+                    balance = line.amount_currency * line.move_id.manual_currency_exchange_rate
                 line.balance = balance
         # Since this method is called during the sync, inside of `create`/`write`, these fields
         # already have been computed and marked as so. But this method should re-trigger it since
