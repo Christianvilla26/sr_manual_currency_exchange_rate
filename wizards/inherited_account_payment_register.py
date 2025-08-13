@@ -9,6 +9,7 @@
 ##############################################################################
 
 from odoo import models, fields, api, _
+from odoo.exceptions import ValidationError
 
 
 class srAccountPaymentRegister(models.TransientModel):
@@ -18,6 +19,25 @@ class srAccountPaymentRegister(models.TransientModel):
     manual_currency_exchange_rate = fields.Float(string='Manual Currency Exchange Rate',digits='Manual Currency')
     active_manual_currency_rate = fields.Boolean('active Manual Currency', default=False)
     journal_amount = fields.Float("Amount", readonly=True)
+    
+    # rhodetech custom fields
+    journal_current_balance = fields.Monetary(
+        string="Saldo Actual del Diario",
+        compute='_compute_journal_current_balance',
+        help="Muestra el saldo actual de la cuenta de liquidez asociada a este diario."
+    )
+    
+    can_confirm_payment = fields.Boolean(
+        string="Can Confirm Payment",
+        compute='_compute_can_confirm_payment',
+        help="Indicates if the payment can be confirmed based on journal balance"
+    )
+    
+    payment_button_state = fields.Selection([
+        ('normal', 'Normal'),
+        ('disabled', 'Disabled'),
+        ('warning', 'Warning')
+    ], string="Payment Button State", compute='_compute_payment_button_state', default='normal')
 
     @api.onchange('manual_currency_exchange_rate','amount')
     def onchange_manual_currency_exchange_rate(self):
@@ -106,6 +126,56 @@ class srAccountPaymentRegister(models.TransientModel):
     def _compute_amount(self):
         return super(srAccountPaymentRegister, self)._compute_amount()
 
+    @api.depends('journal_id')
+    def _compute_journal_current_balance(self):
+        """
+        Calcula el saldo del diario de una forma compatible con múltiples
+        versiones de Odoo, obteniendo el saldo directamente desde la cuenta
+        contable asociada.
+        """
+        for payment in self:
+            payment.journal_current_balance = 0.0
+            
+            # Continuamos solo si es un diario de banco o efectivo
+            if payment.journal_id and payment.journal_id.type in ('bank', 'cash'):
+                # Obtenemos la cuenta de liquidez por defecto del diario.
+                # 'default_account_id' es el nombre estándar para este campo.
+                account = payment.journal_id.default_account_id
+                
+                # Si la cuenta está configurada, leemos su campo 'balance'
+                if account:
+                    payment.journal_current_balance = account.current_balance
+
+    @api.depends('journal_id', 'amount', 'journal_current_balance')
+    def _compute_can_confirm_payment(self):
+        """
+        Determina si el pago puede ser confirmado basándose en el saldo del diario
+        """
+        for payment in self:
+            payment.can_confirm_payment = True
+            
+            # Solo validamos para pagos de salida (outbound) y diarios de banco/efectivo
+            if (payment.payment_type == 'outbound' and 
+                payment.journal_id and 
+                payment.journal_id.type in ('bank', 'cash') and
+                payment.amount and payment.journal_current_balance and 
+                payment.state == 'draft'):
+                
+                # Si el monto del pago es mayor que el saldo disponible, no se puede confirmar
+                if payment.amount > payment.journal_current_balance:
+                    payment.can_confirm_payment = False
+
+    @api.depends('can_confirm_payment')
+    def _compute_payment_button_state(self):
+        """
+        Computes the state of the payment button based on the payment's confirmability.
+        """
+        for payment in self:
+            if payment.can_confirm_payment:
+                payment.payment_button_state = 'normal'
+            else:
+                payment.payment_button_state = 'disabled'
+
     @api.model
     def default_get(self, fields_list):
         # OVERRIDE
@@ -120,7 +190,42 @@ class srAccountPaymentRegister(models.TransientModel):
             })
             return result
 
+    def _get_confirm_button_attrs(self):
+        """
+        Retorna los atributos del botón de confirmación basándose en la validación
+        """
+        self.ensure_one()
+        attrs = {}
+        
+        if not self.can_confirm_payment:
+            attrs['invisible'] = True
+            attrs['readonly'] = True
+        
+        return attrs
+
+    def _validate_journal_balance(self):
+        """
+        Valida que el diario tenga saldo suficiente para realizar el pago
+        """
+        self.ensure_one()
+        
+        # Solo validamos para pagos de salida (outbound) y diarios de banco/efectivo
+        if (self.payment_type == 'outbound' and 
+            self.journal_id and 
+            self.journal_id.type in ('bank', 'cash') and
+            self.amount and self.journal_current_balance):
+            
+            # Si el monto del pago es mayor que el saldo disponible, lanzamos error
+            if self.amount > self.journal_current_balance:
+                raise ValidationError(_(
+                    "No se puede confirmar el pago. El monto del pago (%.2f) "
+                    "excede el saldo disponible en el diario (%.2f)."
+                ) % (self.amount, self.journal_current_balance))
+
     def _create_payment_vals_from_wizard(self, batch_result):
+        # Validate journal balance before creating payment
+        self._validate_journal_balance()
+        
         payment_vals = {
             'date': self.payment_date,
             'amount': self.amount,

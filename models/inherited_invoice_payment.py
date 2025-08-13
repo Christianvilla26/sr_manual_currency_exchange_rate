@@ -8,8 +8,8 @@
 #
 ##############################################################################
 
-from odoo.exceptions import UserError, ValidationError
 from odoo import models, fields, api, _
+from odoo.exceptions import ValidationError
 
 
 class AccountPayments(models.Model):
@@ -20,6 +20,18 @@ class AccountPayments(models.Model):
         compute='_compute_journal_current_balance',
         help="Muestra el saldo actual de la cuenta de liquidez asociada a este diario."
     )
+    
+    can_confirm_payment = fields.Boolean(
+        string="Can Confirm Payment",
+        compute='_compute_can_confirm_payment',
+        help="Indicates if the payment can be confirmed based on journal balance"
+    )
+    
+    payment_button_state = fields.Selection([
+        ('normal', 'Normal'),
+        ('disabled', 'Disabled'),
+        ('warning', 'Warning')
+    ], string="Payment Button State", compute='_compute_payment_button_state', default='normal')
 
     # rhodetech custom fields
     apply_manual_currency_exchange = fields.Boolean(
@@ -49,6 +61,77 @@ class AccountPayments(models.Model):
                 if account:
                     payment.journal_current_balance = account.current_balance
 
+    @api.depends('journal_id', 'amount', 'journal_current_balance')
+    def _compute_can_confirm_payment(self):
+        """
+        Determina si el pago puede ser confirmado basándose en el saldo del diario
+        """
+        for payment in self:
+            payment.can_confirm_payment = True
+            
+            # Solo validamos para pagos de salida (outbound) y diarios de banco/efectivo
+            if (payment.payment_type == 'outbound' and 
+                payment.journal_id and 
+                payment.journal_id.type in ('bank', 'cash') and
+                payment.amount and payment.journal_current_balance and 
+                payment.state == 'draft'):
+                
+                # Si el monto del pago es mayor que el saldo disponible, no se puede confirmar
+                if payment.amount > payment.journal_current_balance:
+                    payment.can_confirm_payment = False
+
+    @api.depends('can_confirm_payment', 'payment_type', 'journal_id', 'amount')
+    def _compute_payment_button_state(self):
+        """
+        Calcula el estado del botón de confirmación del pago
+        """
+        for payment in self:
+            if not payment.can_confirm_payment and payment.payment_type == 'outbound':
+                payment.payment_button_state = 'disabled'
+            elif not payment.can_confirm_payment:
+                payment.payment_button_state = 'warning'
+            else:
+                payment.payment_button_state = 'normal'
+
+    def _validate_journal_balance(self):
+        """
+        Valida que el diario tenga saldo suficiente para realizar el pago
+        """
+        self.ensure_one()
+        
+        # Solo validamos para pagos de salida (outbound) y diarios de banco/efectivo
+        if (self.payment_type == 'outbound' and 
+            self.journal_id and 
+            self.journal_id.type in ('bank', 'cash') and
+            self.amount and self.journal_current_balance):
+            
+            # Si el monto del pago es mayor que el saldo disponible, lanzamos error
+            if self.amount > self.journal_current_balance:
+                raise ValidationError(_(
+                    "No se puede confirmar el pago. El monto del pago (%.2f) "
+                    "excede el saldo disponible en el diario (%.2f)."
+                ) % (self.amount, self.journal_current_balance))
+
+    def action_post(self):
+        # Validate journal balance before posting payment
+        for payment in self:
+            payment._validate_journal_balance()
+        
+        return super(AccountPayments, self).action_post()
+
+    def _get_confirm_button_attrs(self):
+        """
+        Retorna los atributos del botón de confirmación basándose en la validación
+        """
+        self.ensure_one()
+        attrs = {}
+        
+        if not self.can_confirm_payment:
+            attrs['invisible'] = True
+            attrs['readonly'] = True
+        
+        return attrs
+
     @api.onchange('currency_id')
     def onchange_currency_id(self):
         if self.currency_id:
@@ -71,7 +154,7 @@ class AccountPayments(models.Model):
         write_off_line_vals = write_off_line_vals or {}
 
         if not self.outstanding_account_id:
-            raise UserError(_(
+            raise ValidationError(_(
                 "You can't create a new payment without an outstanding payments/receipts account set either on the company or the %s payment method in the %s journal.",
                 self.payment_method_line_id.name, self.journal_id.display_name))
 

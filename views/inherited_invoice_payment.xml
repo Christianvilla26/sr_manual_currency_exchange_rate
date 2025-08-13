@@ -8,9 +8,17 @@
 			<field name="arch" type="xml">
 				<field name="journal_id" position="after">
 					<field name="journal_current_balance" widget="monetary" options="{'currency_field': 'currency_id'}"/>
+					<field name="can_confirm_payment" invisible="1"/>
+					<field name="payment_button_state" invisible="1"/>
 					<field name="active_manual_currency_rate" invisible="1"/>
 					<field name="apply_manual_currency_exchange" invisible="active_manual_currency_rate == False" />
 					<field name="manual_currency_exchange_rate" invisible="apply_manual_currency_exchange == False or active_manual_currency_rate == False" required="apply_manual_currency_exchange == True" />
+				</field>
+				<field name="amount" position="after">
+					<div class="alert alert-warning" invisible="can_confirm_payment">
+						<strong>Advertencia:</strong> El monto del pago excede el saldo disponible en el diario. 
+						No se puede confirmar este pago.
+					</div>
 				</field>
 			</field>
 		</record>
