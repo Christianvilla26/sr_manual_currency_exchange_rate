@@ -158,8 +158,7 @@ class srAccountPaymentRegister(models.TransientModel):
             if (payment.payment_type == 'outbound' and 
                 payment.journal_id and 
                 payment.journal_id.type in ('bank', 'cash') and
-                payment.amount and payment.journal_current_balance and 
-                payment.state == 'draft'):
+                payment.amount and payment.journal_current_balance):
                 
                 # Si el monto del pago es mayor que el saldo disponible, no se puede confirmar
                 if payment.amount > payment.journal_current_balance:
