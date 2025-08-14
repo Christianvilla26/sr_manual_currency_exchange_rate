@@ -16,7 +16,7 @@ class srAccountPaymentRegister(models.TransientModel):
     _inherit = 'account.payment.register'
 
     apply_manual_currency_exchange = fields.Boolean(string='Apply Manual Currency Exchange')
-    manual_currency_exchange_rate = fields.Float(string='Manual Currency Exchange Rate',digits='Manual Currency')
+    manual_currency_exchange_rate = fields.Float(string='Manual Currency Exchange Rate',digits=(16, 6))
     active_manual_currency_rate = fields.Boolean('active Manual Currency', default=False)
     journal_amount = fields.Float("Amount", readonly=True)
     
