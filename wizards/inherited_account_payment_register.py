@@ -126,25 +126,86 @@ class srAccountPaymentRegister(models.TransientModel):
     def _compute_amount(self):
         return super(srAccountPaymentRegister, self)._compute_amount()
 
-    @api.depends('journal_id')
+    @api.depends('journal_id', 'payment_date')
     def _compute_journal_current_balance(self):
         """
-        Calcula el saldo del diario de una forma compatible con múltiples
-        versiones de Odoo, obteniendo el saldo directamente desde la cuenta
-        contable asociada.
+        Calcula el saldo del diario al momento de la fecha del pago,
+        obteniendo el saldo directamente desde la cuenta contable asociada.
         """
+        # Get all unique accounts and dates to optimize the query
+        accounts_to_compute = {}
+        for payment in self:
+            if (payment.journal_id and 
+                payment.journal_id.type in ('bank', 'cash') and 
+                payment.journal_id.default_account_id and 
+                payment.payment_date):
+                account = payment.journal_id.default_account_id
+                if account.id not in accounts_to_compute:
+                    accounts_to_compute[account.id] = []
+                accounts_to_compute[account.id].append(payment.payment_date)
+        
+        # Calculate balances for each account up to each date
+        balances = {}
+        for account_id, dates in accounts_to_compute.items():
+            for date in set(dates):  # Use set to avoid duplicate queries for same date
+                domain = [
+                    ('account_id', '=', account_id),
+                    ('date', '<=', date),
+                    ('parent_state', '=', 'posted')
+                ]
+                
+                # Use _read_group for efficient aggregation like Odoo core
+                result = self.env['account.move.line']._read_group(
+                    domain=domain,
+                    groupby=['account_id'],
+                    aggregates=['balance:sum'],
+                )
+                
+                if result:
+                    # _read_group returns a list of tuples, where the first element is the group key
+                    # and subsequent elements are the aggregated values
+                    balance = result[0][1]  # First result, second element (balance sum)
+                    balances[(account_id, date)] = balance
+                else:
+                    balances[(account_id, date)] = 0.0
+        
+        # Assign balances to payments
         for payment in self:
             payment.journal_current_balance = 0.0
             
-            # Continuamos solo si es un diario de banco o efectivo
-            if payment.journal_id and payment.journal_id.type in ('bank', 'cash'):
-                # Obtenemos la cuenta de liquidez por defecto del diario.
-                # 'default_account_id' es el nombre estándar para este campo.
-                account = payment.journal_id.default_account_id
+            if (payment.journal_id and 
+                payment.journal_id.type in ('bank', 'cash') and 
+                payment.journal_id.default_account_id and 
+                payment.payment_date):
                 
-                # Si la cuenta está configurada, leemos su campo 'balance'
-                if account:
-                    payment.journal_current_balance = account.current_balance
+                account = payment.journal_id.default_account_id
+                balance = balances.get((account.id, payment.payment_date), 0.0)
+                
+                # For foreign currency journals, we need to convert the balance
+                if (payment.journal_id.currency_id and 
+                    payment.journal_id.currency_id != payment.company_id.currency_id):
+                    # The balance field is in company currency, so we need to get the amount_currency
+                    domain = [
+                        ('account_id', '=', account.id),
+                        ('date', '<=', payment.payment_date),
+                        ('parent_state', '=', 'posted')
+                    ]
+                    
+                    # Use _read_group for amount_currency aggregation
+                    result = self.env['account.move.line']._read_group(
+                        domain=domain,
+                        groupby=['account_id'],
+                        aggregates=['amount_currency:sum'],
+                    )
+                    
+                    if result:
+                        # _read_group returns a list of tuples, where the first element is the group key
+                        # and subsequent elements are the aggregated values
+                        payment.journal_current_balance = result[0][1]  # First result, second element (amount_currency sum)
+                    else:
+                        payment.journal_current_balance = 0.0
+                else:
+                    payment.journal_current_balance = balance
 
     @api.depends('journal_id', 'amount', 'journal_current_balance')
     def _compute_can_confirm_payment(self):
