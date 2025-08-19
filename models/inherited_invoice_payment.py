@@ -42,12 +42,11 @@ class AccountPayments(models.Model):
     active_manual_currency_rate = fields.Boolean(
         'active Manual Currency', default=False)
 
-    @api.depends('journal_id')
+    @api.depends('journal_id', 'date')
     def _compute_journal_current_balance(self):
         """
-        Calcula el saldo del diario de una forma compatible con múltiples
-        versiones de Odoo, obteniendo el saldo directamente desde la cuenta
-        contable asociada.
+        Calcula el saldo del diario al momento de la fecha del pago,
+        obteniendo el saldo directamente desde la cuenta contable asociada.
         """
         for payment in self:
             payment.journal_current_balance = 0.0
@@ -58,9 +57,21 @@ class AccountPayments(models.Model):
                 # 'default_account_id' es el nombre estándar para este campo.
                 account = payment.journal_id.default_account_id
                 
-                # Si la cuenta está configurada, leemos su campo 'balance'
-                if account:
-                    payment.journal_current_balance = account.current_balance
+                # Si la cuenta está configurada, calculamos el saldo hasta la fecha del pago
+                if account and payment.date:
+                    # Calculamos el saldo hasta la fecha del pago
+                    # Sumamos todos los débitos y créditos hasta esa fecha
+                    domain = [
+                        ('account_id', '=', account.id),
+                        ('date', '<=', payment.date),
+                        ('move_id.state', '=', 'posted')
+                    ]
+                    
+                    # Calculamos el saldo: débitos - créditos
+                    debit_sum = sum(self.env['account.move.line'].search(domain).mapped('debit'))
+                    credit_sum = sum(self.env['account.move.line'].search(domain).mapped('credit'))
+                    
+                    payment.journal_current_balance = debit_sum - credit_sum
 
     @api.depends('journal_id', 'amount', 'journal_current_balance')
     def _compute_can_confirm_payment(self):
